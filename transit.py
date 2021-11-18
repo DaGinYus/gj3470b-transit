@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from astropy.io import fits
 
 
-def getfiles():
+def files_from_arg():
     """Returns the filenames matching the command line arguments
        using the glob module.
     """
@@ -28,7 +28,9 @@ def transit():
     """Processes data related to exoplanet transit.
        UPDATE THIS DOCSTRING LATER
     """
-    fdata = [fits.open(f) for f in getfiles()]
+    fdata = []
+    for fname in files_from_arg():
+        with astropy.op
 
 
 if __name__ == "__main__":
