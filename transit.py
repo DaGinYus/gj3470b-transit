@@ -28,9 +28,15 @@ def transit():
     """Processes data related to exoplanet transit.
        UPDATE THIS DOCSTRING LATER
     """
+    # some image files were taken with a different filter
+    EXPECTED_FILT_TYPE = "ip"
+    
     fdata = []
     for fname in files_from_arg():
-        with astropy.op
+        with fits.open(fname) as f:
+            if f[0].header["FILTER"] == EXPECTED_FILT_TYPE:
+                fdata.append(f[0].data)
+    print(np.array(fdata))
 
 
 if __name__ == "__main__":
