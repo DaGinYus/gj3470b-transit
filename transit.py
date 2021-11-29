@@ -37,30 +37,31 @@ def files_from_arg():
 
     return fnames
 
-def match_star(daofind_list, match_x, match_y, threshold=5):
+def match_star(sources, match_x, match_y, threshold=5):
     """Returns the index of the star matching the coordinates most closely.
        Takes a list of sources from DAOStarFinder as input.
     """
-    source_x = daofind_list["xcentroid"].data
-    source_y = daofind_list["ycentroid"].data
+    source_x = sources["xcentroid"].data
+    source_y = sources["ycentroid"].data
     dist = np.sqrt((source_x - match_x)**2 + (source_y - match_y)**2)
     found_sources = np.where(dist < threshold)[0]
     if found_sources:
         return found_sources[0]
+    return None
 
 def create_errormap(frame, header):
-    """Creates an error map based on the gain value in the header and 
+    """Creates an error map based on the gain value in the header and
        the provided image frame.
     """
     gain = header["GAIN"]
-    return np.sqrt(frame/gain)
+    return np.sqrt(np.abs(frame)/gain)
 
-def extract_photometry(pos, frame, errormap):
+def extract_photometry(positions, frame, errormap):
     """Perfoms aperture photometry with sigma clipping on the provided
-       frame.
+       frame. 
     """
-    aperture = CircularAperture(pos, r=_APERTURE_RADIUS)
-    annulus_aperture = CircularAnnulus(pos, r_in=_ANNULUS_RADIUS_IN,
+    aperture = CircularAperture(positions, r=_APERTURE_RADIUS)
+    annulus_aperture = CircularAnnulus(positions, r_in=_ANNULUS_RADIUS_IN,
                                        r_out=_ANNULUS_RADIUS_OUT)
     annulus_masks = annulus_aperture.to_mask(method="center")
 
@@ -77,10 +78,9 @@ def extract_photometry(pos, frame, errormap):
     phot["aper_sum_bkgsub"] = phot["aperture_sum"] - phot["aper_bkg"]
     return phot
 
-def transit():
-    """Processes data related to exoplanet transit.
-       UPDATE THIS DOCSTRING LATER
-    """
+def load_data():
+    """Returns two arrays, one storing the image data for each FITS file,
+       and another storing the header data."""
     fheaders = []
     fdata = []
     for fname in files_from_arg():
@@ -89,31 +89,57 @@ def transit():
             if f[0].header["FILTER"] == _EXPECTED_FILT_TYPE:
                 fheaders.append(f[0].header)
                 fdata.append(f[0].data)
+    return fdata, fheaders
 
-    _, bg_median, bg_std = sigma_clipped_stats(fdata[0], sigma=3.0)
+def find_ref_stars(frame):
+    """Returns the positions of the 20 brightest stars as reference stars
+       for photometry. Note that the object of interest is included in this list.
+    """
+    _, bg_median, bg_std = sigma_clipped_stats(frame, sigma=3.0)
     daofind = DAOStarFinder(fwhm=6.0, threshold=10.0*bg_std)
-    sources = daofind(fdata[0] - bg_median)
-    positions = np.transpose((sources["xcentroid"], sources["ycentroid"]))
+    sources = daofind(frame - bg_median)
 
-    # take the 20 brightest points as reference stars
+    # take the 20 brightest points
     sort_descending_value = np.argsort(sources["peak"])[::-1]
     ref_star_indices = sort_descending_value[:20]
-    ref_star_pos = positions[ref_star_indices]
+    ref_stars = sources[ref_star_indices]
+    return ref_stars
+
+
+def transit():
+    """Processes data related to exoplanet transit.
+       UPDATE THIS DOCSTRING LATER
+    """
+    fdata, fheaders = load_data()
+
+    # find stars based on first frame
+    ref_stars = find_ref_stars(fdata[0])
 
     # the index of the object of interest
-    obj_index = match_star(sources[ref_star_indices],
-                           _OBJ_XCOORD, _OBJ_YCOORD)
-    initial_x_ref = fheaders[0]["CRPIX1"]
-    initial_y_ref = fheaders[0]["CRPIX2"]
+    obj_index = match_star(ref_stars, _OBJ_XCOORD, _OBJ_YCOORD)
+    if not obj_index:
+        raise SystemExit(f"No object found at {_OBJ_XCOORD}, {_OBJ_YCOORD}")
 
+    initial_obj_pos = np.transpose((ref_stars["xcentroid"], ref_stars["ycentroid"]))
+    initial_ref_pos = np.array([fheaders[0]["CRPIX1"], fheaders[0]["CRPIX2"]])
+
+    aper_list = []
     for i, frame in enumerate(fdata):
         header = fheaders[i]
+        ref_pos = np.array([header["CRPIX1"], header["CRPIX2"]])
+        offset = ref_pos - initial_ref_pos
+        positions = initial_obj_pos + offset
         errormap = create_errormap(frame, header)
-        phot = extract_photometry(ref_star_pos, frame, errormap)
-    for col in phot.colnames:
-        phot[col].info.format = '%.8g'  # for consistent table output
-    print(phot)
+        phot = extract_photometry(positions, frame, errormap)
+        aper_list.append(phot["aper_sum_bkgsub"].value)
+        for col in phot.colnames:
+            phot[col].info.format = '%.8g'  # for consistent table output
 
+
+    aper_list = np.array(aper_list)
+    plt.plot(aper_list[:,0])
+    plt.plot(aper_list[:,obj_index])
+    plt.show()
 
 if __name__ == "__main__":
     transit()
