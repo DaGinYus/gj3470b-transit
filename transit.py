@@ -9,7 +9,7 @@ This is the main file handling the data reduction
 import sys
 import os
 import logging
-import plotexport
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
@@ -19,7 +19,10 @@ from photutils.detection import DAOStarFinder
 from photutils.aperture import (
     aperture_photometry,
     CircularAperture,
-    CircularAnnulus)
+    CircularAnnulus
+)
+
+import plotexport
 
 _EXPECTED_FILT_TYPE = "ip"
 _APERTURE_RADIUS = 15
@@ -89,19 +92,18 @@ def extract_photometry(positions, frame, errormap):
     phot["aper_sum_bkgsub"] = phot["aperture_sum"] - phot["aper_bkg"]
     return phot
 
-def load_data():
-    """Returns two arrays, one storing the image data for each FITS file,
-       and another storing the header data."""
-    fheaders = []
-    fdata = []
-    for fname in files_from_arg():
-        with fits.open(fname, memmap=False) as f:
-            # some image files were taken with a different filter
-            if f[0].header["FILTER"] == _EXPECTED_FILT_TYPE:
-                fheaders.append(f[0].header)
-                fdata.append(f[0].data)
-    logging.info("%i files read", len(fdata))
-    return fdata, fheaders
+def load_data(fname):
+    """Reads the data in a FITS file and returns the header and 
+       image data.
+    """
+    fheader = None
+    fdata = None
+    with fits.open(fname, memmap=False) as f:
+        # some image files were taken with a different filter
+        if f[0].header["FILTER"] == _EXPECTED_FILT_TYPE:
+            fheader = f[0].header
+            fdata = f[0].data
+    return fdata, fheader
 
 def find_ref_stars(frame):
     """Returns the positions of the 20 brightest stars as reference stars
@@ -118,23 +120,17 @@ def find_ref_stars(frame):
     logging.info("Reference stars found")
     return ref_stars
 
-def gen_aper_sum_list(data, headers, initial_pos, initial_ref_pos):
-    """Generates a list of background subtracted aperture sum values per star,
-       per frame. The output is an NxN numpy array.
+def get_aper_sum(frame, header, initial_pos, initial_ref_pos):
+    """Returns the (background subtracted) aperture sum for the reference
+       stars within a frame, along with the error.
     """
-    aper_list = []
-    for i, frame in enumerate(data):
-        header = headers[i]
-        ref_pos = np.array([header["CRPIX1"], header["CRPIX2"]])
-        offset = ref_pos - initial_ref_pos
-        positions = initial_pos + offset
-        errormap = create_errormap(frame, header)
-        phot = extract_photometry(positions, frame, errormap)
-        aper_list.append(phot["aper_sum_bkgsub"].value)
-        for col in phot.colnames:
-            phot[col].info.format = '%.8g'  # for consistent table output
-    logging.info("Extracted photometry for %i stars", len(aper_list[0]))
-    return np.array(aper_list)
+    ref_pos = np.array([header["CRPIX1"], header["CRPIX2"]])
+    offset = ref_pos - initial_ref_pos
+    positions = initial_pos + offset
+    errormap = create_errormap(frame, header)
+    phot = extract_photometry(positions, frame, errormap)
+    return [phot["aper_sum_bkgsub"].value,
+            phot["aperture_sum_err"].value]
 
 def clean_aper_data(aper_sum_data, obj_index):
     """Takes as input an NxN np array where each row corresponds to the
@@ -149,39 +145,79 @@ def clean_aper_data(aper_sum_data, obj_index):
             to data for a specific star, not for a specific frame.
     """
     cleaned_aper_sum = []
-    for i in range(len(aper_sum_data[0])):
-        aper_sum_data[:, i] /= np.median(aper_sum_data[:, i])  # norm the data
+    cleaned_aper_err = []
+    aper_sum = aper_sum_data[:, 0]
+    aper_err = aper_sum_data[:, 1]
+    for i in range(len(aper_sum[0])):
+        # norm the data
+        aper_median = np.median(aper_sum[:, i])
+        aper_sum[:, i] /= aper_median
+        aper_err[:, i] /= aper_median
         if i not in _EXCLUDE_OUTLIERS and i != obj_index:
-            cleaned_aper_sum.append(aper_sum_data[:, i])
-    obj_data = aper_sum_data[:, obj_index]
-    return obj_data, np.array(cleaned_aper_sum)
+            cleaned_aper_sum.append(aper_sum[:, i])
+            cleaned_aper_err.append(aper_err[:, i])
+    obj_data = aper_sum[:, obj_index]
+    obj_err = aper_err[:, obj_index]
+    return (obj_data, obj_err,
+            np.array(cleaned_aper_sum),
+            np.array(cleaned_aper_err))
 
+def initial_setup(fdata, fheader):
+    """Sets up some basic variables based on data in the first frame.
+         - obj_index is the index that the object occurs at in the dataset.
+         - initial_pos is an array containing the inital positions of the
+           reference stars.
+         - initial_ref_pos is the location of the reference pixel defined
+           in the header of the FITS file.
+    """
+    ref_stars = find_ref_stars(fdata)
+    obj_index = match_star(ref_stars, _OBJ_XCOORD, _OBJ_YCOORD)
+    if not obj_index:
+        raise SystemExit(f"No object found at "
+                         f"{_OBJ_XCOORD}, {_OBJ_YCOORD}")
+    initial_pos = np.transpose((ref_stars["xcentroid"],
+                                ref_stars["ycentroid"]))
+    initial_ref_pos = np.array([fheader["CRPIX1"],
+                                fheader["CRPIX2"]])
+    return obj_index, initial_pos, initial_ref_pos
+
+def normalize_flux(obj_flux, obj_err, ref_fluxes):
+    """Normalize the object flux, to account for atmospheric effects.
+       At each frame, divide the object flux by the median of all the 
+       other fluxes. Returns a normalized 1d array of flux values.
+    """
+    median = np.median(ref_fluxes, axis=0)
+    return (obj_flux / median, obj_err / median)
 
 def transit():
     """Processes data related to exoplanet transit.
        UPDATE THIS DOCSTRING LATER
     """
     enable_logging()
-    fdata, fheaders = load_data()
 
-    # find stars based on first frame
-    ref_stars = find_ref_stars(fdata[0])
+    aper_sum_list = []
+    file_count = 0
+    for fname in files_from_arg():
+        fdata, fheader = load_data(fname)
+        if fdata is not None:
+            # find stars based on first frame
+            if file_count == 0:
+                obj_index, initial_pos, \
+                    initial_ref_pos = initial_setup(fdata, fheader)
 
-    # the index of the object of interest
-    obj_index = match_star(ref_stars, _OBJ_XCOORD, _OBJ_YCOORD)
-    if not obj_index:
-        raise SystemExit(f"No object found at {_OBJ_XCOORD}, {_OBJ_YCOORD}")
+            aper_sum_list.append(get_aper_sum(fdata, fheader, initial_pos,
+                                              initial_ref_pos))
+            file_count += 1
+    logging.info("Aperture sums extracted from %i files", file_count)
 
-    initial_pos = np.transpose((ref_stars["xcentroid"],
-                                ref_stars["ycentroid"]))
-    initial_ref_pos = np.array([fheaders[0]["CRPIX1"],
-                                fheaders[0]["CRPIX2"]])
+    aper_sum_list = np.array(aper_sum_list)
+    obj_flux, obj_err, ref_fluxes, ref_err \
+        = clean_aper_data(aper_sum_list, obj_index)
+    plotexport.aper_sum_all(obj_flux, ref_fluxes)
 
-    aper_sum_list = gen_aper_sum_list(fdata, fheaders, initial_pos,
-                                      initial_ref_pos)
-
-    obj_aper_sum, aper_sum_data = clean_aper_data(aper_sum_list, obj_index)
-    plotexport.aper_sum_all(obj_aper_sum, aper_sum_data)
+    norm_obj_flux, norm_obj_err = normalize_flux(obj_flux, obj_err,
+                                                 ref_fluxes)
+    plotexport.corrected_flux(norm_obj_flux, norm_obj_err)
 
 
 if __name__ == "__main__":

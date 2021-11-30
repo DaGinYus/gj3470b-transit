@@ -3,7 +3,7 @@ Created by Matthew Wong
 UCSB 2021-11-30
 PHYS 134L Final Project
 GJ 3470b Transit
-A file containing plotting functions and export
+A file containing plotting and export functions
 """
 
 import os
@@ -25,16 +25,33 @@ def export_to_image(fname, fig):
         pass
     fpath = os.path.join(_EXPORT_DIRNAME, fname)
     fig.savefig(fpath)
-    logging.info("Exported to %s", fpath)
+    logging.info("Plot exported to %s", fpath)
 
-def aper_sum_all(obj_aper_sum, aper_sum_data):
+def aper_sum_all(obj_flux, ref_fluxes):
+    """Plot the object flux in comparison to the flux from the
+       reference stars.
+    """
     fig, ax = plt.subplots(figsize=(_DEFAULT_FIGSIZE))
-    for i, row in enumerate(aper_sum_data):
-        ax.plot(row, label=f"Star {i+1}", alpha=0.6)
-    ax.plot(obj_aper_sum, label="Object of Interest", color="black")
-    ax.set_title(("Aperture Sum Curves for Object of Interest "
-                  "and Reference Stars"))
+    for i, ref_flux in enumerate(ref_fluxes):
+        ax.plot(ref_flux, alpha=0.6)
+    ax.plot(obj_flux, label="Object of Interest", color="black")
+    ax.set_title("Aperture Sum Curves for Object of Interest "
+                 "and Reference Stars")
     ax.set_xlabel("Frame Number")
-    ax.set_ylabel("Normalized Flux Value")
-    ax.legend(ncol=2)
+    ax.set_ylabel("Normalized Flux")
+    ax.legend()
     export_to_image("aper_sum_all", fig)
+
+def corrected_flux(obj_flux, obj_err):
+    """Plots the object flux normalized relative to the reference
+       stars.
+    """
+    fig, ax = plt.subplots(figsize=(_DEFAULT_FIGSIZE))
+    ax.errorbar(range(len(obj_flux)), obj_flux, yerr=obj_err,
+                ls='', elinewidth=0.5, capsize=2,
+                marker='.', color="black")
+    ax.set_title("Flux of Object of Interest Corrected Using "
+                 "Reference Stars")
+    ax.set_xlabel("Frame Number")
+    ax.set_ylabel("Relative Flux")
+    export_to_image("corrected_flux", fig)
