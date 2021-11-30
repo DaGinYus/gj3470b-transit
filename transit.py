@@ -26,6 +26,7 @@ _ANNULUS_RADIUS_IN = 17
 _ANNULUS_RADIUS_OUT = 25
 _OBJ_XCOORD = 1006.22
 _OBJ_YCOORD = 1046.99
+_EXCLUDE_OUTLIERS = (0, 1, 2, 3, 6, 15)
 
 def files_from_arg():
     """Checks if there are filenames passed in from arguments and then
@@ -105,6 +106,40 @@ def find_ref_stars(frame):
     ref_stars = sources[ref_star_indices]
     return ref_stars
 
+def gen_aper_sum_list(data, headers, initial_pos, initial_ref_pos):
+    """Generates a list of background subtracted aperture sum values per star,
+       per frame. The output is an NxN numpy array.
+    """
+    aper_list = []
+    for i, frame in enumerate(data):
+        header = headers[i]
+        ref_pos = np.array([header["CRPIX1"], header["CRPIX2"]])
+        offset = ref_pos - initial_ref_pos
+        positions = initial_pos + offset
+        errormap = create_errormap(frame, header)
+        phot = extract_photometry(positions, frame, errormap)
+        aper_list.append(phot["aper_sum_bkgsub"].value)
+        for col in phot.colnames:
+            phot[col].info.format = '%.8g'  # for consistent table output
+    return np.array(aper_list)
+
+def clean_data(aper_sum_data, obj_index):
+    """Takes as input an NxN np array where each row corresponds to the
+       (background subtracted) aperture sum data for each frame. This function
+       removes the outliers specified in _EXCLUDE_OUTLIERS
+       and returns two arrays:
+
+          - the first array returned is the photometry 
+            for the object of interest
+          - the second array is an NxN array pruned of the outliers
+    """
+    cleaned_aper_sum = []
+    for i in range(len(aper_sum_data)):
+        aper_sum_data[:, i] /= np.median(aper_sum_data[:, i])  # norm the data
+        if i not in _EXCLUDE_OUTLIERS and i != obj_index:
+            cleaned_aper_sum.append(aper_sum_data[:, i])
+    obj_data = aper_sum_data[:, obj_index]
+    return obj_data, np.array(cleaned_aper_sum)
 
 def transit():
     """Processes data related to exoplanet transit.
@@ -120,25 +155,17 @@ def transit():
     if not obj_index:
         raise SystemExit(f"No object found at {_OBJ_XCOORD}, {_OBJ_YCOORD}")
 
-    initial_obj_pos = np.transpose((ref_stars["xcentroid"], ref_stars["ycentroid"]))
+    initial_pos = np.transpose((ref_stars["xcentroid"], ref_stars["ycentroid"]))
     initial_ref_pos = np.array([fheaders[0]["CRPIX1"], fheaders[0]["CRPIX2"]])
 
-    aper_list = []
-    for i, frame in enumerate(fdata):
-        header = fheaders[i]
-        ref_pos = np.array([header["CRPIX1"], header["CRPIX2"]])
-        offset = ref_pos - initial_ref_pos
-        positions = initial_obj_pos + offset
-        errormap = create_errormap(frame, header)
-        phot = extract_photometry(positions, frame, errormap)
-        aper_list.append(phot["aper_sum_bkgsub"].value)
-        for col in phot.colnames:
-            phot[col].info.format = '%.8g'  # for consistent table output
+    aper_sum_list = gen_aper_sum_list(fdata, fheaders, initial_pos,
+                                      initial_ref_pos)
 
-
-    aper_list = np.array(aper_list)
-    plt.plot(aper_list[:,0])
-    plt.plot(aper_list[:,obj_index])
+    obj_aper_sum, aper_sum_data = clean_data(aper_sum_list, obj_index)
+    for i in range(len(aper_sum_list[0])):
+        plt.plot(aper_sum_data[:, i], label=i, alpha=0.6)
+    plt.plot(obj_aper_sum, color="black")
+    plt.legend()
     plt.show()
 
 if __name__ == "__main__":
