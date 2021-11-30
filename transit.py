@@ -3,12 +3,13 @@ Created by Matthew Wong
 UCSB 2021-11-18
 PHYS 134L Final Project
 GJ 3470b Transit
+This is the main file handling the data reduction
 """
 
-import contextlib
 import sys
 import os
-import glob
+import logging
+import plotexport
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
@@ -27,6 +28,15 @@ _ANNULUS_RADIUS_OUT = 25
 _OBJ_XCOORD = 1006.22
 _OBJ_YCOORD = 1046.99
 _EXCLUDE_OUTLIERS = (0, 1, 2, 3, 6, 15)
+
+def enable_logging():
+    """Configures logging."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[logging.StreamHandler()]
+    )
 
 def files_from_arg():
     """Checks if there are filenames passed in from arguments and then
@@ -90,6 +100,7 @@ def load_data():
             if f[0].header["FILTER"] == _EXPECTED_FILT_TYPE:
                 fheaders.append(f[0].header)
                 fdata.append(f[0].data)
+    logging.info("%i files read", len(fdata))
     return fdata, fheaders
 
 def find_ref_stars(frame):
@@ -104,6 +115,7 @@ def find_ref_stars(frame):
     sort_descending_value = np.argsort(sources["peak"])[::-1]
     ref_star_indices = sort_descending_value[:20]
     ref_stars = sources[ref_star_indices]
+    logging.info("Reference stars found")
     return ref_stars
 
 def gen_aper_sum_list(data, headers, initial_pos, initial_ref_pos):
@@ -121,30 +133,35 @@ def gen_aper_sum_list(data, headers, initial_pos, initial_ref_pos):
         aper_list.append(phot["aper_sum_bkgsub"].value)
         for col in phot.colnames:
             phot[col].info.format = '%.8g'  # for consistent table output
+    logging.info("Extracted photometry for %i stars", len(aper_list[0]))
     return np.array(aper_list)
 
-def clean_data(aper_sum_data, obj_index):
+def clean_aper_data(aper_sum_data, obj_index):
     """Takes as input an NxN np array where each row corresponds to the
        (background subtracted) aperture sum data for each frame. This function
        removes the outliers specified in _EXCLUDE_OUTLIERS
        and returns two arrays:
 
-          - the first array returned is the photometry 
-            for the object of interest
-          - the second array is an NxN array pruned of the outliers
+          - The first array returned is the photometry for the 
+            object of interest
+          - The second array is an NxN array pruned of the outliers.
+            Note that the dimensions are now flipped. Each row now corresponds
+            to data for a specific star, not for a specific frame.
     """
     cleaned_aper_sum = []
-    for i in range(len(aper_sum_data)):
+    for i in range(len(aper_sum_data[0])):
         aper_sum_data[:, i] /= np.median(aper_sum_data[:, i])  # norm the data
         if i not in _EXCLUDE_OUTLIERS and i != obj_index:
             cleaned_aper_sum.append(aper_sum_data[:, i])
     obj_data = aper_sum_data[:, obj_index]
     return obj_data, np.array(cleaned_aper_sum)
 
+
 def transit():
     """Processes data related to exoplanet transit.
        UPDATE THIS DOCSTRING LATER
     """
+    enable_logging()
     fdata, fheaders = load_data()
 
     # find stars based on first frame
@@ -155,18 +172,17 @@ def transit():
     if not obj_index:
         raise SystemExit(f"No object found at {_OBJ_XCOORD}, {_OBJ_YCOORD}")
 
-    initial_pos = np.transpose((ref_stars["xcentroid"], ref_stars["ycentroid"]))
-    initial_ref_pos = np.array([fheaders[0]["CRPIX1"], fheaders[0]["CRPIX2"]])
+    initial_pos = np.transpose((ref_stars["xcentroid"],
+                                ref_stars["ycentroid"]))
+    initial_ref_pos = np.array([fheaders[0]["CRPIX1"],
+                                fheaders[0]["CRPIX2"]])
 
     aper_sum_list = gen_aper_sum_list(fdata, fheaders, initial_pos,
                                       initial_ref_pos)
 
-    obj_aper_sum, aper_sum_data = clean_data(aper_sum_list, obj_index)
-    for i in range(len(aper_sum_list[0])):
-        plt.plot(aper_sum_data[:, i], label=i, alpha=0.6)
-    plt.plot(obj_aper_sum, color="black")
-    plt.legend()
-    plt.show()
+    obj_aper_sum, aper_sum_data = clean_aper_data(aper_sum_list, obj_index)
+    plotexport.aper_sum_all(obj_aper_sum, aper_sum_data)
+
 
 if __name__ == "__main__":
     transit()
