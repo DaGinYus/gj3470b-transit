@@ -7,12 +7,10 @@ This is the main file handling the data reduction
 """
 
 import sys
-import os
 import logging
+from datetime import time, date, datetime, timedelta
 
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
 from photutils.detection import DAOStarFinder
@@ -113,7 +111,7 @@ def find_ref_stars(frame):
     daofind = DAOStarFinder(fwhm=6.0, threshold=10.0*bg_std)
     sources = daofind(frame - bg_median)
 
-    # take the 20 brightest points
+    # take the 20 highest flux values
     sort_descending_value = np.argsort(sources["peak"])[::-1]
     ref_star_indices = sort_descending_value[:20]
     ref_stars = sources[ref_star_indices]
@@ -179,7 +177,8 @@ def initial_setup(fdata, fheader):
                                 ref_stars["ycentroid"]))
     initial_ref_pos = np.array([fheader["CRPIX1"],
                                 fheader["CRPIX2"]])
-    return obj_index, initial_pos, initial_ref_pos
+    initial_time = fheader["UTSTART"]
+    return obj_index, initial_pos, initial_ref_pos, initial_time
 
 def normalize_flux(obj_flux, obj_err, ref_fluxes):
     """Normalize the object flux, to account for atmospheric effects.
@@ -189,6 +188,15 @@ def normalize_flux(obj_flux, obj_err, ref_fluxes):
     median = np.median(ref_fluxes, axis=0)
     return (obj_flux / median, obj_err / median)
 
+def delta_t(initial_time, current_time):
+    """Subtract two time values to obtain the time passed, in hours.
+       The two input values are both strings in UTC HH:MM:SS format.
+    """
+    dummydate = date(1, 1, 1)
+    t1 = datetime.combine(dummydate, time.fromisoformat(current_time))
+    t0 = datetime.combine(dummydate, time.fromisoformat(initial_time))
+    return (t1 - t0) / timedelta(hours=1)
+
 def transit():
     """Processes data related to exoplanet transit.
        UPDATE THIS DOCSTRING LATER
@@ -196,29 +204,33 @@ def transit():
     enable_logging()
 
     aper_sum_list = []
+    delta_t_list = []
     file_count = 0
     for fname in files_from_arg():
         fdata, fheader = load_data(fname)
         if fdata is not None:
             # find stars based on first frame
             if file_count == 0:
-                obj_index, initial_pos, \
-                    initial_ref_pos = initial_setup(fdata, fheader)
+                obj_index, initial_pos, initial_ref_pos, initial_time \
+                    = initial_setup(fdata, fheader)
 
             aper_sum_list.append(get_aper_sum(fdata, fheader, initial_pos,
                                               initial_ref_pos))
+            delta_t_list.append(delta_t(initial_time, fheader["UTSTART"]))
             file_count += 1
     logging.info("Aperture sums extracted from %i files", file_count)
 
     aper_sum_list = np.array(aper_sum_list)
-    obj_flux, obj_err, ref_fluxes, ref_err \
+
+    plotexport.aper_sum_with_outliers(aper_sum_list, obj_index)
+
+    obj_flux, obj_err, ref_fluxes, _ \
         = clean_aper_data(aper_sum_list, obj_index)
     plotexport.aper_sum_all(obj_flux, ref_fluxes)
 
     norm_obj_flux, norm_obj_err = normalize_flux(obj_flux, obj_err,
                                                  ref_fluxes)
     plotexport.corrected_flux(norm_obj_flux, norm_obj_err)
-
 
 if __name__ == "__main__":
     transit()
