@@ -30,7 +30,7 @@ def export_to_image(fname, fig):
     fig.savefig(fpath, format=_EXPORT_FORMAT)
     logging.info("Plot exported to %s", fpath)
 
-def aper_sum_with_outliers(aper_sum_list, obj_index):
+def aper_sum_with_outliers(t, aper_sum_list, obj_index):
     """Plots the object flux with outliers. Each curve is normalized
        to its median.
     """
@@ -42,38 +42,48 @@ def aper_sum_with_outliers(aper_sum_list, obj_index):
         fluxcurve = plot_data[:, 0, i]
         fluxcurve /= np.median(fluxcurve)
         if i != obj_index:
-            ax.plot(fluxcurve, alpha=0.6)
-    ax.plot(obj_data, label="GJ 3470", color="black")
+            ax.plot(t, fluxcurve, alpha=0.6)
+    ax.plot(t, obj_data, label="GJ 3470", color="black")
     ax.set_title("Aperture Sum Curves for Chosen Objects in Frame")
-    ax.set_xlabel("Frame Number")
+    ax.set_xlabel("Time Since Observation Start [h]")
     ax.set_ylabel("Normalized Flux")
     ax.legend(ncol=4)
     export_to_image("aper_sum_outliers", fig)
 
-def aper_sum_all(obj_flux, ref_fluxes):
+def aper_sum_all(t, obj_flux, ref_fluxes):
     """Plot the object flux in comparison to the flux from the
        reference stars.
     """
     fig, ax = plt.subplots(figsize=(_DEFAULT_FIGSIZE))
     for i, ref_flux in enumerate(ref_fluxes):
-        ax.plot(ref_flux, alpha=0.6)
-    ax.plot(obj_flux, label="GJ 3470", color="black")
+        ax.plot(t, ref_flux, alpha=0.6)
+    ax.plot(t, obj_flux, label="GJ 3470", color="black")
     ax.set_title("Aperture Sum Curves for GJ 3470 "
                  "and Chosen Reference Stars")
-    ax.set_xlabel("Frame Number")
+    ax.set_xlabel("Time Since Observation Start [h]")
     ax.set_ylabel("Normalized Flux")
     ax.legend()
     export_to_image("aper_sum_all", fig)
 
-def corrected_flux(obj_flux, obj_err):
+def corrected_flux(t, obj_flux, obj_err):
     """Plots the object flux normalized relative to the reference
        stars.
     """
     fig, ax = plt.subplots(figsize=(_DEFAULT_FIGSIZE))
-    ax.errorbar(range(len(obj_flux)), obj_flux, yerr=obj_err,
+    ax.errorbar(t, obj_flux, yerr=obj_err,
                 ls='', elinewidth=0.5, capsize=2,
                 marker='.', color="black")
     ax.set_title("Relative Flux of GJ 3470 Corrected Using Reference Stars")
-    ax.set_xlabel("Frame Number")
+    ax.set_xlabel("Time Since Observation Start [h]")
     ax.set_ylabel("Relative Flux")
     export_to_image("corrected_flux", fig)
+
+def fitted_flux(t, obj_flux, fit_func):
+    """Scatterplots the object flux with the fit function."""
+    fig, ax = plt.subplots(figsize=(_DEFAULT_FIGSIZE))
+    ax.plot(t, obj_flux, ls='', marker='.', color="black")
+    ax.plot(t, fit_func, color="blue")
+    ax.set_title("Relative Flux of GJ 3470 Fitted Using Boxcar Function")
+    ax.set_xlabel("Time Since Observation Start [h]")
+    ax.set_ylabel("Relative Flux")
+    export_to_image("fitted_flux", fig)

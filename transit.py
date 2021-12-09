@@ -11,6 +11,7 @@ import logging
 from datetime import time, date, datetime, timedelta
 
 import numpy as np
+from scipy.optimize import differential_evolution
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
 from photutils.detection import DAOStarFinder
@@ -29,6 +30,7 @@ _ANNULUS_RADIUS_OUT = 25
 _OBJ_XCOORD = 1006.22
 _OBJ_YCOORD = 1046.99
 _EXCLUDE_OUTLIERS = (0, 1, 2, 3, 6, 15)
+_EXPECTED_DELTA_FLUX = 0.007
 
 def enable_logging():
     """Configures logging."""
@@ -188,23 +190,70 @@ def normalize_flux(obj_flux, obj_err, ref_fluxes):
     median = np.median(ref_fluxes, axis=0)
     return (obj_flux / median, obj_err / median)
 
-def delta_t(initial_time, current_time):
+def get_delta_t(initial_time, current_time):
     """Subtract two time values to obtain the time passed, in hours.
        The two input values are both strings in UTC HH:MM:SS format.
     """
-    dummydate = date(1, 1, 1)
-    t1 = datetime.combine(dummydate, time.fromisoformat(current_time))
-    t0 = datetime.combine(dummydate, time.fromisoformat(initial_time))
+    tempdate = date(1, 1, 1)
+    t1 = datetime.combine(tempdate, time.fromisoformat(current_time))
+    t0 = datetime.combine(tempdate, time.fromisoformat(initial_time))
     return (t1 - t0) / timedelta(hours=1)
+
+def boxcar(x, h0, A, x1, x2):
+    """Boxcar function used for fitting. A is the height of the step
+       and x1 and x2 are the left and right edges, respectively. h0 is the
+       initial height of the function.
+
+       h0 _____        _____ 
+               |______|     } A
+               ^      ^
+               x1     x2
+    """
+    # using the half-maximum convention
+    H = lambda x : np.heaviside(x, 0.5)
+    return h0 - A*(H(x - x1) - H(x - x2))
+
+def fit_data(t, flux, tol=0.05):
+    """Fits the boxcar function to the data using
+       scipy.optimize.differential_evolution. t is essentially the x-axis.
+       Here it is the time since the observation started. flux is the flux curve
+       for the object. tol is the tolerance for the bounds, default to a 5%
+       deviation.
+
+       The cost function is defined as with a simple quadratic cost function:
+          F(x) = (t - x)^2
+
+       Returns the parameter array that minimizes the cost function.
+    """
+    # let p be parameter array [h0, A, x1, x2]
+    # assume that the height offset is close to 1 due to normalization
+    # use a 1% deviation tolerance by default
+    h0_bounds = [1-tol, 1+tol]
+    A_bounds = [0, 1 - (1-tol)*np.min(flux)]
+    x_bounds = [0, t[-1]]
+    # x bounds are repeated due to x1 and x2
+    bounds = [h0_bounds, A_bounds, x_bounds, x_bounds]
+    cost_func = lambda p: np.sum((boxcar(t, *p) - flux)**2)
+    res = differential_evolution(cost_func, bounds)
+    print(f"\nFIT DATA\n=========\n"
+          f"h0 = {res.x[0]:.8f}\n"
+          f"A  = {res.x[1]:.8f}\n"
+          f"t1 = {res.x[2]:.8f}\n"
+          f"t2 = {res.x[3]:.8f}\n")
+    return res.x
 
 def transit():
     """Processes data related to exoplanet transit.
-       UPDATE THIS DOCSTRING LATER
+       The general process is as follows:
+         - extract data from .fits files
+         - find stars based on first frame
+         - extract photometry for all frames
+         - apply fitting function to data
     """
     enable_logging()
 
-    aper_sum_list = []
-    delta_t_list = []
+    aper_sums = []
+    delta_t = []
     file_count = 0
     for fname in files_from_arg():
         fdata, fheader = load_data(fname)
@@ -214,23 +263,27 @@ def transit():
                 obj_index, initial_pos, initial_ref_pos, initial_time \
                     = initial_setup(fdata, fheader)
 
-            aper_sum_list.append(get_aper_sum(fdata, fheader, initial_pos,
-                                              initial_ref_pos))
-            delta_t_list.append(delta_t(initial_time, fheader["UTSTART"]))
+            aper_sums.append(get_aper_sum(fdata, fheader, initial_pos,
+                                         initial_ref_pos))
+            delta_t.append(get_delta_t(initial_time, fheader["UTSTART"]))
             file_count += 1
     logging.info("Aperture sums extracted from %i files", file_count)
 
-    aper_sum_list = np.array(aper_sum_list)
+    aper_sums = np.array(aper_sums)
 
-    plotexport.aper_sum_with_outliers(aper_sum_list, obj_index)
+    plotexport.aper_sum_with_outliers(delta_t, aper_sums, obj_index)
 
     obj_flux, obj_err, ref_fluxes, _ \
-        = clean_aper_data(aper_sum_list, obj_index)
-    plotexport.aper_sum_all(obj_flux, ref_fluxes)
+        = clean_aper_data(aper_sums, obj_index)
+    plotexport.aper_sum_all(delta_t, obj_flux, ref_fluxes)
 
     norm_obj_flux, norm_obj_err = normalize_flux(obj_flux, obj_err,
                                                  ref_fluxes)
-    plotexport.corrected_flux(norm_obj_flux, norm_obj_err)
+    plotexport.corrected_flux(delta_t, norm_obj_flux, norm_obj_err)
+
+    fit = fit_data(delta_t, norm_obj_flux)
+    plotexport.fitted_flux(delta_t, norm_obj_flux,
+                           boxcar(delta_t, *fit))
 
 if __name__ == "__main__":
     transit()
