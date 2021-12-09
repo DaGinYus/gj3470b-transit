@@ -242,6 +242,38 @@ def fit_data(t, flux, tol=0.05):
           f"t2 = {res.x[3]:.8f}\n")
     return res.x
 
+def stderr(t, data, params):
+    """Calculates the standard error of the data set as if it were a mean model.
+       Separates the data into two parts, one during the transit, and one
+       in the time where the planet is not transiting. Then, assume that the
+       two variables are independent, and add the variances.
+    
+       Since A = h0 - h1, the error in A is given by
+         Var(A) = Var(h0) + Var(h1)
+       where Var is the variance
+    """
+    h0, A, t1, t2 = params
+    h1 = h0 - A
+    # find indices closest to the interval bounds
+    t1_ind = np.argmin(np.abs(t - t1))
+    t2_ind = np.argmin(np.abs(t - t2))
+    int1 = data[:t1_ind]
+    int2 = data[t1_ind+1:t2_ind]
+    int3 = data[t2_ind+1:]
+    len_outer = len(int1) + len(int3)
+    # compute variances for parts of the piecewise function
+    var_outer = (np.sum((int1 - h0)**2) + np.sum((int3 - h0)**2)) / len_outer
+    var_inner = np.sum((int2 - h1)**2) / len(int2)
+    err_h0 = np.sqrt(var_outer)
+    err_h1 = np.sqrt(var_inner)
+    err_A = np.sqrt(var_outer + var_inner)
+    print(f"\nSTD ERROR\n=========\n"
+          f"err_h0 = {err_h0:.8f}\n"
+          f"err_h1 = {err_h1:.8f}\n"
+          f"err_A  = {err_A:.8f}\n")
+    return err_h0, err_A
+
+
 def transit():
     """Processes data related to exoplanet transit.
        The general process is as follows:
@@ -284,6 +316,7 @@ def transit():
     fit = fit_data(delta_t, norm_obj_flux)
     plotexport.fitted_flux(delta_t, norm_obj_flux,
                            boxcar(delta_t, *fit))
+    stderr(delta_t, norm_obj_flux, fit)
 
 if __name__ == "__main__":
     transit()
